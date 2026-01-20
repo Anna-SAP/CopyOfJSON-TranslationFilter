@@ -6,6 +6,13 @@ import { TranslationObject } from './types';
 
 type Status = 'idle' | 'loading' | 'filtering' | 'ready' | 'error' | 'copying';
 
+interface SourceFilterItem {
+  id: string;
+  text: string;
+  whole: boolean;
+  caseSens: boolean;
+}
+
 const workerCode = `
   let allTranslations = [];
   let primaryFilteredTranslations = []; 
@@ -78,14 +85,13 @@ const workerCode = `
         case 'filter':
           const { 
             keySearch,
-            sourceSearch, 
+            sourceFilters = [], // Array of { text, whole, caseSens }
+            sourceLogic = 'AND',
             targetSearch, 
             targetNegativeSearch,
             matchKeyWholeWord,
-            matchSourceWholeWord, 
             matchTargetWholeWord,
             matchKeyCase,
-            matchSourceCase,
             matchTargetCase,
             matchTargetNegativeCase,
             activeTargetLanguages = []
@@ -97,10 +103,10 @@ const workerCode = `
               primaryFilteredTranslations = [];
           } else {
               const sKey = matchKeyCase ? keySearch.trim() : keySearch.trim().toLowerCase();
-              const sSrc = matchSourceCase ? sourceSearch.trim() : sourceSearch.trim().toLowerCase();
               const sTarPos = matchTargetCase ? targetSearch.trim() : targetSearch.trim().toLowerCase();
               const sTarNeg = matchTargetNegativeCase ? targetNegativeSearch.trim() : targetNegativeSearch.trim().toLowerCase();
 
+              const activeSourceFilters = sourceFilters.filter(f => f.text && f.text.trim() !== '');
               const targetLangsToCheck = activeTargetLanguages.filter(l => l !== 'en-US');
 
               primaryFilteredTranslations = allTranslations.filter(item => {
@@ -111,11 +117,25 @@ const workerCode = `
                       if (matchKeyWholeWord ? target !== sKey : !target.includes(sKey)) return false;
                   }
 
-                  // 2. Source
-                  if (sSrc !== '') {
-                      const val = String(item['en-US'] || '');
-                      const target = matchSourceCase ? val : val.toLowerCase();
-                      if (matchSourceWholeWord ? target !== sSrc : !target.includes(sSrc)) return false;
+                  // 2. Source (Dynamic Logic)
+                  if (activeSourceFilters.length > 0) {
+                      const srcVal = String(item['en-US'] || '');
+                      
+                      const checkFilter = (filter) => {
+                          const fText = filter.caseSens ? filter.text.trim() : filter.text.trim().toLowerCase();
+                          const target = filter.caseSens ? srcVal : srcVal.toLowerCase();
+                          if (filter.whole) {
+                              return target === fText;
+                          }
+                          return target.includes(fText);
+                      };
+
+                      if (sourceLogic === 'OR') {
+                          if (!activeSourceFilters.some(checkFilter)) return false;
+                      } else {
+                          // AND (Default)
+                          if (!activeSourceFilters.every(checkFilter)) return false;
+                      }
                   }
 
                   // 3. Target
@@ -208,14 +228,18 @@ const workerCode = `
 
 const App: React.FC = () => {
   const [keySearch, setKeySearch] = useState('');
-  const [sourceSearch, setSourceSearch] = useState('');
+  
+  // Source Filter State
+  const [sourceFilters, setSourceFilters] = useState<SourceFilterItem[]>([
+    { id: 'initial', text: '', whole: false, caseSens: false }
+  ]);
+  const [sourceLogic, setSourceLogic] = useState<'AND' | 'OR'>('AND');
+
   const [targetSearch, setTargetSearch] = useState('');
   const [targetNegativeSearch, setTargetNegativeSearch] = useState('');
   const [matchKeyWholeWord, setMatchKeyWholeWord] = useState(false);
-  const [matchSourceWholeWord, setMatchSourceWholeWord] = useState(false);
   const [matchTargetWholeWord, setMatchTargetWholeWord] = useState(false);
   const [matchKeyCase, setMatchKeyCase] = useState(false);
-  const [matchSourceCase, setMatchSourceCase] = useState(false);
   const [matchTargetCase, setMatchTargetCase] = useState(false);
   const [matchTargetNegativeCase, setMatchTargetNegativeCase] = useState(false);
   const [refineQuery, setRefineQuery] = useState('');
@@ -363,20 +387,19 @@ const App: React.FC = () => {
         jobId: newJobId,
         payload: { 
           keySearch,
-          sourceSearch, 
+          sourceFilters: sourceFilters.map(({id, ...rest}) => rest), // Send plain objects
+          sourceLogic,
           targetSearch, 
           targetNegativeSearch,
           matchKeyWholeWord,
-          matchSourceWholeWord, 
           matchTargetWholeWord,
           matchKeyCase,
-          matchSourceCase,
           matchTargetCase,
           matchTargetNegativeCase,
           activeTargetLanguages: Array.from(selectedLanguages) 
         },
     });
-  }, [status, keySearch, sourceSearch, targetSearch, targetNegativeSearch, matchKeyWholeWord, matchSourceWholeWord, matchTargetWholeWord, matchKeyCase, matchSourceCase, matchTargetCase, matchTargetNegativeCase, selectedLanguages]);
+  }, [status, keySearch, sourceFilters, sourceLogic, targetSearch, targetNegativeSearch, matchKeyWholeWord, matchTargetWholeWord, matchKeyCase, matchTargetCase, matchTargetNegativeCase, selectedLanguages]);
 
   const handleRefineSearch = (query: string) => {
     setRefineQuery(query);
@@ -388,6 +411,24 @@ const App: React.FC = () => {
       const newSet = new Set(selectedLanguages);
       if (newSet.has(lang)) newSet.delete(lang); else newSet.add(lang);
       setSelectedLanguages(newSet);
+  };
+
+  // Source Filter Handlers
+  const addSourceFilter = () => {
+    setSourceFilters(prev => [...prev, { id: Date.now().toString(), text: '', whole: false, caseSens: false }]);
+  };
+
+  const removeSourceFilter = (id: string) => {
+    if (sourceFilters.length > 1) {
+      setSourceFilters(prev => prev.filter(item => item.id !== id));
+    } else {
+        // If it's the last one, just clear it
+        updateSourceFilter(id, 'text', '');
+    }
+  };
+
+  const updateSourceFilter = (id: string, field: keyof SourceFilterItem, value: any) => {
+    setSourceFilters(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
   };
 
   const processFile = (file: File) => {
@@ -502,13 +543,64 @@ const App: React.FC = () => {
                         </div>
                     </section>
 
-                    <section>
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block mb-2">Source (en-US)</label>
-                        <input type="text" value={sourceSearch} onChange={(e)=>setSourceSearch(e.target.value)} placeholder="Search English content..." className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none"/>
-                        <div className="flex gap-4 mt-2">
-                            <label className="flex items-center text-xs text-gray-400 cursor-pointer"><input type="checkbox" checked={matchSourceWholeWord} onChange={(e)=>setMatchSourceWholeWord(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match whole</label>
-                            <label className="flex items-center text-xs text-gray-400 cursor-pointer"><input type="checkbox" checked={matchSourceCase} onChange={(e)=>setMatchSourceCase(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match case</label>
+                    <section className="bg-gray-700/20 p-3 rounded border border-gray-700/50">
+                        <div className="flex justify-between items-center mb-2">
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Source (en-US)</label>
+                            <div className="flex bg-gray-900 rounded p-0.5 border border-gray-700">
+                                <button 
+                                    onClick={() => setSourceLogic('AND')}
+                                    className={`text-[10px] px-2 py-0.5 rounded transition-colors ${sourceLogic === 'AND' ? 'bg-cyan-600 text-white font-bold' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                    AND
+                                </button>
+                                <button 
+                                    onClick={() => setSourceLogic('OR')}
+                                    className={`text-[10px] px-2 py-0.5 rounded transition-colors ${sourceLogic === 'OR' ? 'bg-cyan-600 text-white font-bold' : 'text-gray-400 hover:text-white'}`}
+                                >
+                                    OR
+                                </button>
+                            </div>
                         </div>
+
+                        <div className="space-y-4">
+                          {sourceFilters.map((filter) => (
+                            <div key={filter.id} className="relative group animate-fadeIn">
+                                <div className="flex gap-2 items-center">
+                                     <input 
+                                        type="text" 
+                                        value={filter.text}
+                                        onChange={(e) => updateSourceFilter(filter.id, 'text', e.target.value)}
+                                        placeholder="Search..."
+                                        className="flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none"
+                                     />
+                                     {sourceFilters.length > 1 && (
+                                         <button onClick={() => removeSourceFilter(filter.id)} className="text-gray-500 hover:text-red-400 p-1 rounded hover:bg-gray-700/50 transition-colors" title="Remove condition">
+                                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                                              <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                                            </svg>
+                                         </button>
+                                     )}
+                                </div>
+                                <div className="flex gap-4 mt-2">
+                                    <label className="flex items-center text-xs text-gray-400 cursor-pointer select-none">
+                                        <input type="checkbox" checked={filter.whole} onChange={(e) => updateSourceFilter(filter.id, 'whole', e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/>
+                                        Match whole
+                                    </label>
+                                    <label className="flex items-center text-xs text-gray-400 cursor-pointer select-none">
+                                        <input type="checkbox" checked={filter.caseSens} onChange={(e) => updateSourceFilter(filter.id, 'caseSens', e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/>
+                                        Match case
+                                    </label>
+                                </div>
+                            </div>
+                          ))}
+                        </div>
+                        
+                        <button onClick={addSourceFilter} className="mt-3 text-xs flex items-center font-bold text-cyan-400 hover:text-cyan-300 transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5 mr-1">
+                              <path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" />
+                            </svg>
+                            Add condition
+                        </button>
                     </section>
 
                     <section className="bg-gray-700/20 p-3 rounded border border-gray-700/50">
@@ -594,6 +686,8 @@ const App: React.FC = () => {
           .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
           .custom-scrollbar::-webkit-scrollbar-thumb { background: #374151; border-radius: 10px; }
           .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+          @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+          .animate-fadeIn { animation: fadeIn 0.2s ease-out; }
       `}</style>
     </div>
   );
