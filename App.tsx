@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ClipboardIcon from './components/icons/ClipboardIcon';
 import CheckIcon from './components/icons/CheckIcon';
@@ -512,8 +513,16 @@ const App: React.FC = () => {
 
                     <section className="bg-gray-700/20 p-3 rounded border border-gray-700/50">
                         <label className="text-xs font-bold text-cyan-400 uppercase tracking-wider block mb-2">Target Filter</label>
-                        <input type="text" value={targetSearch} onChange={(e)=>setTargetSearch(e.target.value)} placeholder="Positive keyword..." className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none mb-2"/>
-                        <input type="text" value={targetNegativeSearch} onChange={(e)=>setTargetNegativeSearch(e.target.value)} placeholder="Negative keyword (Exclude)..." className="w-full bg-gray-900 border border-red-900/50 rounded px-3 py-2 text-sm focus:ring-1 focus:ring-red-500 outline-none"/>
+                        
+                        <div className="flex mb-2">
+                            <span className="inline-flex items-center justify-center px-3 bg-white text-gray-900 text-xs font-bold rounded-l min-w-[3.5rem]">Pos</span>
+                            <input type="text" value={targetSearch} onChange={(e)=>setTargetSearch(e.target.value)} placeholder="Positive keyword..." className="flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded-r px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none"/>
+                        </div>
+
+                        <div className="flex">
+                            <span className="inline-flex items-center justify-center px-3 bg-white text-gray-900 text-xs font-bold rounded-l min-w-[3.5rem]">Neg</span>
+                            <input type="text" value={targetNegativeSearch} onChange={(e)=>setTargetNegativeSearch(e.target.value)} placeholder="Negative keyword (Exclude)..." className="flex-1 min-w-0 bg-gray-900 border border-red-900/50 rounded-r px-3 py-2 text-sm focus:ring-1 focus:ring-red-500 outline-none"/>
+                        </div>
                         
                         <div className="grid grid-cols-2 gap-y-2 mt-3">
                             <label className="flex items-center text-xs text-gray-400 cursor-pointer"><input type="checkbox" checked={matchTargetWholeWord} onChange={(e)=>setMatchTargetWholeWord(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match whole</label>
