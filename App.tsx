@@ -87,7 +87,9 @@ const workerCode = `
           const { 
             keySearch,
             isKeyRegex,
-            sourceFilters = [], // Array of { text, whole, caseSens, isRegex }
+            keyNegativeSearch,
+            isKeyNegativeRegex,
+            sourceFilters = [], 
             sourceLogic = 'AND',
             targetSearch, 
             isTargetRegex,
@@ -96,6 +98,7 @@ const workerCode = `
             matchKeyWholeWord,
             matchTargetWholeWord,
             matchKeyCase,
+            matchKeyNegativeCase,
             matchTargetCase,
             matchTargetNegativeCase,
             activeTargetLanguages = []
@@ -108,24 +111,45 @@ const workerCode = `
           } else {
               // --- PRE-COMPILE REGEX PATTERNS ---
               
+              // Positive Key Regex
               let keyRgx = null;
               if (isKeyRegex && keySearch.trim()) {
                   try { keyRgx = new RegExp(keySearch.trim(), matchKeyCase ? '' : 'i'); } catch(e) {}
               }
 
-              // --- PRE-PROCESS MULTI-KEY ---
+              // Negative Key Regex
+              let keyNegRgx = null;
+              if (isKeyNegativeRegex && keyNegativeSearch && keyNegativeSearch.trim()) {
+                  try { keyNegRgx = new RegExp(keyNegativeSearch.trim(), matchKeyNegativeCase ? '' : 'i'); } catch(e) {}
+              }
+
+              // --- PRE-PROCESS MULTI-KEY (POSITIVE) ---
               let keyList = [];
               let keySet = null;
               let useMultiKey = false;
               if (!isKeyRegex && keySearch && keySearch.trim() !== '') {
                   useMultiKey = true;
-                  // Split by newline, comma, or whitespace
                   keyList = keySearch.split(/[\\n,\\s]+/).map(k => k.trim()).filter(k => k !== '');
                   if (!matchKeyCase) {
                       keyList = keyList.map(k => k.toLowerCase());
                   }
                   if (matchKeyWholeWord) {
                       keySet = new Set(keyList);
+                  }
+              }
+
+              // --- PRE-PROCESS MULTI-KEY (NEGATIVE) ---
+              let keyNegList = [];
+              let keyNegSet = null;
+              let useMultiNegKey = false;
+              if (!isKeyNegativeRegex && keyNegativeSearch && keyNegativeSearch.trim() !== '') {
+                  useMultiNegKey = true;
+                  keyNegList = keyNegativeSearch.split(/[\\n,\\s]+/).map(k => k.trim()).filter(k => k !== '');
+                  if (!matchKeyNegativeCase) {
+                      keyNegList = keyNegList.map(k => k.toLowerCase());
+                  }
+                  if (matchKeyWholeWord) {
+                      keyNegSet = new Set(keyNegList);
                   }
               }
 
@@ -161,17 +185,17 @@ const workerCode = `
               const targetLangsToCheck = activeTargetLanguages.filter(l => l !== 'en-US');
 
               primaryFilteredTranslations = allTranslations.filter(item => {
-                  // 1. Key
+                  const valKey = String(item.key || '');
+                  
+                  // 1. Positive Key Check
                   if (keySearch.trim() !== '') {
-                      const val = String(item.key || '');
                       if (isKeyRegex) {
-                          if (!keyRgx || !keyRgx.test(val)) return false;
+                          if (!keyRgx || !keyRgx.test(valKey)) return false;
                       } else if (useMultiKey) {
-                          const target = matchKeyCase ? val : val.toLowerCase();
+                          const target = matchKeyCase ? valKey : valKey.toLowerCase();
                           if (matchKeyWholeWord) {
                               if (!keySet.has(target)) return false;
                           } else {
-                              // Partial match against any key in the list
                               let match = false;
                               for (let i = 0; i < keyList.length; i++) {
                                   if (target.includes(keyList[i])) {
@@ -182,13 +206,29 @@ const workerCode = `
                               if (!match) return false;
                           }
                       } else {
-                          // Fallback for single key if splitting failed or was empty (though covered by useMultiKey logic)
-                          const target = matchKeyCase ? val : val.toLowerCase();
+                          // Fallback should not be reached with useMultiKey logic, but safe guard
+                          const target = matchKeyCase ? valKey : valKey.toLowerCase();
                           if (matchKeyWholeWord ? target !== sKey : !target.includes(sKey)) return false;
                       }
                   }
 
-                  // 2. Source (Dynamic Logic)
+                  // 2. Negative Key Check
+                  if (keyNegativeSearch && keyNegativeSearch.trim() !== '') {
+                       if (isKeyNegativeRegex) {
+                          if (keyNegRgx && keyNegRgx.test(valKey)) return false;
+                       } else if (useMultiNegKey) {
+                          const target = matchKeyNegativeCase ? valKey : valKey.toLowerCase();
+                          if (matchKeyWholeWord) {
+                              if (keyNegSet.has(target)) return false;
+                          } else {
+                              for (let i = 0; i < keyNegList.length; i++) {
+                                  if (target.includes(keyNegList[i])) return false;
+                              }
+                          }
+                       }
+                  }
+
+                  // 3. Source (Dynamic Logic)
                   if (preparedSourceFilters.length > 0) {
                       const srcVal = String(item['en-US'] || '');
                       
@@ -196,7 +236,6 @@ const workerCode = `
                           if (filter.isRegex) {
                               return filter.isValid && filter.tester.test(srcVal);
                           }
-                          // Standard Text
                           const fText = filter.caseSens ? filter.text.trim() : filter.text.trim().toLowerCase();
                           const target = filter.caseSens ? srcVal : srcVal.toLowerCase();
                           if (filter.whole) {
@@ -208,12 +247,11 @@ const workerCode = `
                       if (sourceLogic === 'OR') {
                           if (!preparedSourceFilters.some(checkFilter)) return false;
                       } else {
-                          // AND (Default)
                           if (!preparedSourceFilters.every(checkFilter)) return false;
                       }
                   }
 
-                  // 3. Target
+                  // 4. Target
                   const hasPos = targetSearch.trim() !== '';
                   const hasNeg = targetNegativeSearch.trim() !== '';
 
@@ -225,7 +263,6 @@ const workerCode = `
                           const val = String(item[lang] || '');
                           if (!val) continue;
                           
-                          // Check Positive
                           if (hasPos && !foundPos) {
                               if (isTargetRegex) {
                                   if (targetPosRgx && targetPosRgx.test(val)) foundPos = true;
@@ -237,7 +274,6 @@ const workerCode = `
                               }
                           }
 
-                          // Check Negative
                           if (hasNeg) {
                               if (isTargetNegativeRegex) {
                                   if (targetNegRgx && targetNegRgx.test(val)) {
@@ -316,9 +352,12 @@ const workerCode = `
 const App: React.FC = () => {
   // Key Search State
   const [keySearch, setKeySearch] = useState('');
+  const [keyNegativeSearch, setKeyNegativeSearch] = useState('');
   const [matchKeyWholeWord, setMatchKeyWholeWord] = useState(false);
   const [matchKeyCase, setMatchKeyCase] = useState(false);
+  const [matchKeyNegativeCase, setMatchKeyNegativeCase] = useState(false);
   const [isKeyRegex, setIsKeyRegex] = useState(false);
+  const [isKeyNegativeRegex, setIsKeyNegativeRegex] = useState(false);
   
   // Source Filter State
   const [sourceFilters, setSourceFilters] = useState<SourceFilterItem[]>([
@@ -390,6 +429,11 @@ const App: React.FC = () => {
     if (!keySearch || isKeyRegex) return 0;
     return keySearch.split(/[\n,\s]+/).filter(k => k.trim()).length;
   }, [keySearch, isKeyRegex]);
+  
+  const keyNegCount = useMemo(() => {
+    if (!keyNegativeSearch || isKeyNegativeRegex) return 0;
+    return keyNegativeSearch.split(/[\n,\s]+/).filter(k => k.trim()).length;
+  }, [keyNegativeSearch, isKeyNegativeRegex]);
 
   const requestPage = useCallback((page: number, view: 'main' | 'subset', langsOverride?: string[]) => {
       const langs = langsOverride || Array.from(selectedLanguagesRef.current);
@@ -487,6 +531,8 @@ const App: React.FC = () => {
         payload: { 
           keySearch,
           isKeyRegex,
+          keyNegativeSearch,
+          isKeyNegativeRegex,
           sourceFilters: sourceFilters.map(({id, ...rest}) => rest),
           sourceLogic,
           targetSearch,
@@ -496,12 +542,13 @@ const App: React.FC = () => {
           matchKeyWholeWord,
           matchTargetWholeWord,
           matchKeyCase,
+          matchKeyNegativeCase,
           matchTargetCase,
           matchTargetNegativeCase,
           activeTargetLanguages: Array.from(selectedLanguages) 
         },
     });
-  }, [status, keySearch, isKeyRegex, sourceFilters, sourceLogic, targetSearch, isTargetRegex, targetNegativeSearch, isTargetNegativeRegex, matchKeyWholeWord, matchTargetWholeWord, matchKeyCase, matchTargetCase, matchTargetNegativeCase, selectedLanguages]);
+  }, [status, keySearch, isKeyRegex, keyNegativeSearch, isKeyNegativeRegex, sourceFilters, sourceLogic, targetSearch, isTargetRegex, targetNegativeSearch, isTargetNegativeRegex, matchKeyWholeWord, matchTargetWholeWord, matchKeyCase, matchKeyNegativeCase, matchTargetCase, matchTargetNegativeCase, selectedLanguages]);
 
   const handleRefineSearch = (query: string) => {
     setRefineQuery(query);
@@ -643,31 +690,71 @@ const App: React.FC = () => {
                     <section>
                         <div className="flex justify-between items-center mb-2">
                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">Search by Key</label>
-                            {keyCount > 0 && (
+                            {(keyCount > 0 || keyNegCount > 0) && (
                                 <div className="flex items-center gap-2">
-                                     <span className="text-[10px] text-cyan-400 bg-cyan-900/30 px-2 py-0.5 rounded border border-cyan-800 font-mono">
-                                        {keyCount} keys
-                                     </span>
-                                     <button onClick={() => setKeySearch('')} className="text-[10px] text-gray-500 hover:text-red-400 transition-colors">Clear</button>
+                                     {keyCount > 0 && (
+                                         <span className="text-[10px] text-cyan-400 bg-cyan-900/30 px-2 py-0.5 rounded border border-cyan-800 font-mono">
+                                            {keyCount} pos
+                                         </span>
+                                     )}
+                                     {keyNegCount > 0 && (
+                                         <span className="text-[10px] text-red-400 bg-red-900/30 px-2 py-0.5 rounded border border-red-800 font-mono">
+                                            {keyNegCount} neg
+                                         </span>
+                                     )}
+                                     <button onClick={() => { setKeySearch(''); setKeyNegativeSearch(''); }} className="text-[10px] text-gray-500 hover:text-red-400 transition-colors">Clear</button>
                                 </div>
                             )}
                         </div>
-                        <textarea
-                            value={keySearch} 
-                            onChange={(e)=>setKeySearch(e.target.value)} 
-                            placeholder={isKeyRegex ? "e.g. ^Navigation\\..*" : "Paste keys here (separated by newline, comma or space)..."}
-                            className={`w-full bg-gray-900 border rounded px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none h-24 resize-y custom-scrollbar font-mono text-xs ${isKeyRegex && !checkRegexValidity(keySearch) ? 'border-red-500 focus:border-red-500' : 'border-gray-700'}`}
-                        />
-                        <div className="flex gap-4 mt-2">
-                            <label className={`flex items-center text-xs text-gray-400 cursor-pointer ${isKeyRegex ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                                <input type="checkbox" checked={matchKeyWholeWord} onChange={(e)=>setMatchKeyWholeWord(e.target.checked)} disabled={isKeyRegex} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match whole
+                        
+                        <div className="space-y-2">
+                            {/* Positive Key Input */}
+                            <div className="flex">
+                                <span className="inline-flex items-center justify-center px-2 bg-white text-gray-900 text-xs font-bold rounded-l min-w-[3rem] border-r-0 self-stretch">Pos</span>
+                                <textarea
+                                    value={keySearch} 
+                                    onChange={(e)=>setKeySearch(e.target.value)} 
+                                    placeholder={isKeyRegex ? "Regex pattern..." : "Paste keys here..."}
+                                    className={`w-full bg-gray-900 border rounded-r px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none h-24 resize-y custom-scrollbar font-mono text-xs ${isKeyRegex && !checkRegexValidity(keySearch) ? 'border-red-500 focus:border-red-500' : 'border-gray-700'}`}
+                                />
+                            </div>
+
+                            {/* Negative Key Input */}
+                            <div className="flex">
+                                <span className="inline-flex items-center justify-center px-2 bg-white text-gray-900 text-xs font-bold rounded-l min-w-[3rem] border-r-0 self-stretch">Neg</span>
+                                <textarea
+                                    value={keyNegativeSearch} 
+                                    onChange={(e)=>setKeyNegativeSearch(e.target.value)} 
+                                    placeholder={isKeyNegativeRegex ? "Regex pattern (Exclude)..." : "Exclude keys..."}
+                                    className={`w-full bg-gray-900 border rounded-r px-3 py-2 text-sm focus:ring-1 focus:ring-red-500 outline-none h-24 resize-y custom-scrollbar font-mono text-xs ${isKeyNegativeRegex && !checkRegexValidity(keyNegativeSearch) ? 'border-red-500 focus:border-red-500' : 'border-gray-700'}`}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-y-2 mt-3">
+                            <label className={`flex items-center text-xs text-gray-400 cursor-pointer ${isKeyRegex || isKeyNegativeRegex ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                                <input type="checkbox" checked={matchKeyWholeWord} onChange={(e)=>setMatchKeyWholeWord(e.target.checked)} disabled={isKeyRegex || isKeyNegativeRegex} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match whole
                             </label>
-                            <label className="flex items-center text-xs text-gray-400 cursor-pointer">
-                                <input type="checkbox" checked={matchKeyCase} onChange={(e)=>setMatchKeyCase(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match case
-                            </label>
-                            <label className="flex items-center text-xs text-yellow-400 cursor-pointer">
-                                <input type="checkbox" checked={isKeyRegex} onChange={(e)=>setIsKeyRegex(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-yellow-500"/> Regex
-                            </label>
+                            
+                            {/* Positive Options */}
+                            <div className="flex gap-3 col-span-1">
+                                <label className="flex items-center text-xs text-gray-400 cursor-pointer">
+                                    <input type="checkbox" checked={matchKeyCase} onChange={(e)=>setMatchKeyCase(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match case (Pos)
+                                </label>
+                                <label className="flex items-center text-xs text-yellow-400 cursor-pointer">
+                                    <input type="checkbox" checked={isKeyRegex} onChange={(e)=>setIsKeyRegex(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-yellow-500"/> Regex (Pos)
+                                </label>
+                            </div>
+
+                            {/* Negative Options */}
+                            <div className="flex gap-3 col-span-2 mt-1">
+                                <label className="flex items-center text-xs text-gray-400 cursor-pointer">
+                                    <input type="checkbox" checked={matchKeyNegativeCase} onChange={(e)=>setMatchKeyNegativeCase(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-red-500"/> Match case (Neg)
+                                </label>
+                                <label className="flex items-center text-xs text-yellow-400 cursor-pointer">
+                                    <input type="checkbox" checked={isKeyNegativeRegex} onChange={(e)=>setIsKeyNegativeRegex(e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-yellow-500"/> Regex (Neg)
+                                </label>
+                            </div>
                         </div>
                     </section>
 
