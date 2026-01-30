@@ -113,6 +113,22 @@ const workerCode = `
                   try { keyRgx = new RegExp(keySearch.trim(), matchKeyCase ? '' : 'i'); } catch(e) {}
               }
 
+              // --- PRE-PROCESS MULTI-KEY ---
+              let keyList = [];
+              let keySet = null;
+              let useMultiKey = false;
+              if (!isKeyRegex && keySearch && keySearch.trim() !== '') {
+                  useMultiKey = true;
+                  // Split by newline, comma, or whitespace
+                  keyList = keySearch.split(/[\\n,\\s]+/).map(k => k.trim()).filter(k => k !== '');
+                  if (!matchKeyCase) {
+                      keyList = keyList.map(k => k.toLowerCase());
+                  }
+                  if (matchKeyWholeWord) {
+                      keySet = new Set(keyList);
+                  }
+              }
+
               const preparedSourceFilters = sourceFilters
                   .filter(f => f.text && f.text.trim() !== '')
                   .map(f => {
@@ -150,7 +166,23 @@ const workerCode = `
                       const val = String(item.key || '');
                       if (isKeyRegex) {
                           if (!keyRgx || !keyRgx.test(val)) return false;
+                      } else if (useMultiKey) {
+                          const target = matchKeyCase ? val : val.toLowerCase();
+                          if (matchKeyWholeWord) {
+                              if (!keySet.has(target)) return false;
+                          } else {
+                              // Partial match against any key in the list
+                              let match = false;
+                              for (let i = 0; i < keyList.length; i++) {
+                                  if (target.includes(keyList[i])) {
+                                      match = true;
+                                      break;
+                                  }
+                              }
+                              if (!match) return false;
+                          }
                       } else {
+                          // Fallback for single key if splitting failed or was empty (though covered by useMultiKey logic)
                           const target = matchKeyCase ? val : val.toLowerCase();
                           if (matchKeyWholeWord ? target !== sKey : !target.includes(sKey)) return false;
                       }
@@ -353,6 +385,11 @@ const App: React.FC = () => {
       return a.localeCompare(b);
     });
   }, [availableLanguages]);
+
+  const keyCount = useMemo(() => {
+    if (!keySearch || isKeyRegex) return 0;
+    return keySearch.split(/[\n,\s]+/).filter(k => k.trim()).length;
+  }, [keySearch, isKeyRegex]);
 
   const requestPage = useCallback((page: number, view: 'main' | 'subset', langsOverride?: string[]) => {
       const langs = langsOverride || Array.from(selectedLanguagesRef.current);
@@ -604,13 +641,22 @@ const App: React.FC = () => {
 
                 <div className="space-y-5">
                     <section>
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block mb-2">Search by Key</label>
-                        <input 
-                            type="text" 
+                        <div className="flex justify-between items-center mb-2">
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">Search by Key</label>
+                            {keyCount > 0 && (
+                                <div className="flex items-center gap-2">
+                                     <span className="text-[10px] text-cyan-400 bg-cyan-900/30 px-2 py-0.5 rounded border border-cyan-800 font-mono">
+                                        {keyCount} keys
+                                     </span>
+                                     <button onClick={() => setKeySearch('')} className="text-[10px] text-gray-500 hover:text-red-400 transition-colors">Clear</button>
+                                </div>
+                            )}
+                        </div>
+                        <textarea
                             value={keySearch} 
                             onChange={(e)=>setKeySearch(e.target.value)} 
-                            placeholder={isKeyRegex ? "e.g. ^Navigation\\..*" : "e.g. Navigation.Title"}
-                            className={`w-full bg-gray-900 border rounded px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none ${isKeyRegex && !checkRegexValidity(keySearch) ? 'border-red-500 focus:border-red-500' : 'border-gray-700'}`}
+                            placeholder={isKeyRegex ? "e.g. ^Navigation\\..*" : "Paste keys here (separated by newline, comma or space)..."}
+                            className={`w-full bg-gray-900 border rounded px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none h-24 resize-y custom-scrollbar font-mono text-xs ${isKeyRegex && !checkRegexValidity(keySearch) ? 'border-red-500 focus:border-red-500' : 'border-gray-700'}`}
                         />
                         <div className="flex gap-4 mt-2">
                             <label className={`flex items-center text-xs text-gray-400 cursor-pointer ${isKeyRegex ? 'opacity-50 cursor-not-allowed' : ''}`}>
