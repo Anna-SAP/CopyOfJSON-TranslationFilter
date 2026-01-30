@@ -596,6 +596,11 @@ const App: React.FC = () => {
         updateSourceFilter(id, 'text', '');
     }
   };
+  
+  const handleClearSourceFilters = () => {
+    setSourceFilters([{ id: Date.now().toString(), text: '', whole: false, caseSens: false, isRegex: false }]);
+    setSourceLogic('AND');
+  };
 
   const updateSourceFilter = (id: string, field: keyof SourceFilterItem, value: any) => {
     setSourceFilters(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
@@ -619,6 +624,17 @@ const App: React.FC = () => {
       updateTargetFilter(id, 'posText', '');
       updateTargetFilter(id, 'negText', '');
     }
+  };
+  
+  const handleClearTargetFilters = () => {
+    setTargetFilters([{ 
+      id: Date.now().toString(), 
+      posText: '', negText: '', 
+      whole: false, 
+      posCaseSens: false, posIsRegex: false, 
+      negCaseSens: false, negIsRegex: false 
+    }]);
+    setTargetLogic('AND');
   };
 
   const updateTargetFilter = (id: string, field: keyof TargetFilterItem, value: any) => {
@@ -806,7 +822,12 @@ const App: React.FC = () => {
 
                     <section className="bg-gray-700/20 p-3 rounded border border-gray-700/50">
                         <div className="flex justify-between items-center mb-2">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Source (en-US)</label>
+                            <div className="flex items-center gap-2">
+                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Source (en-US)</label>
+                                {(sourceFilters.length > 1 || sourceFilters[0].text) && (
+                                    <button onClick={handleClearSourceFilters} className="text-[10px] text-gray-500 hover:text-red-400 transition-colors">Clear</button>
+                                )}
+                            </div>
                             <div className="flex bg-gray-900 rounded p-0.5 border border-gray-700">
                                 <button 
                                     onClick={() => setSourceLogic('AND')}
@@ -870,7 +891,12 @@ const App: React.FC = () => {
 
                     <section className="bg-gray-700/20 p-3 rounded border border-gray-700/50">
                         <div className="flex justify-between items-center mb-2">
-                            <label className="text-xs font-bold text-cyan-400 uppercase tracking-wider">Target Filter</label>
+                            <div className="flex items-center gap-2">
+                                <label className="text-xs font-bold text-cyan-400 uppercase tracking-wider">Target Filter</label>
+                                {(targetFilters.length > 1 || targetFilters[0].posText || targetFilters[0].negText) && (
+                                    <button onClick={handleClearTargetFilters} className="text-[10px] text-gray-500 hover:text-red-400 transition-colors">Clear</button>
+                                )}
+                            </div>
                             <div className="flex bg-gray-900 rounded p-0.5 border border-gray-700">
                                 <button 
                                     onClick={() => setTargetLogic('AND')}
