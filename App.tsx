@@ -8,10 +8,13 @@ type Status = 'idle' | 'loading' | 'filtering' | 'ready' | 'error' | 'copying';
 
 interface SourceFilterItem {
   id: string;
-  text: string;
+  posText: string;
+  negText: string;
   whole: boolean;
-  caseSens: boolean;
-  isRegex: boolean;
+  posCaseSens: boolean;
+  posIsRegex: boolean;
+  negCaseSens: boolean;
+  negIsRegex: boolean;
 }
 
 interface TargetFilterItem {
@@ -159,18 +162,16 @@ const workerCode = `
                   }
               }
 
-              const preparedSourceFilters = sourceFilters
-                  .filter(f => f.text && f.text.trim() !== '')
-                  .map(f => {
-                      if (f.isRegex) {
-                          try {
-                              return { ...f, tester: new RegExp(f.text, f.caseSens ? '' : 'i'), isValid: true };
-                          } catch (e) {
-                              return { ...f, isValid: false };
-                          }
-                      }
-                      return f;
-                  });
+              const preparedSourceFilters = sourceFilters.map(f => {
+                  const p = { ...f, valid: true };
+                  if (f.posIsRegex && f.posText && f.posText.trim()) {
+                      try { p.posTester = new RegExp(f.posText, f.posCaseSens ? '' : 'i'); } catch(e) { p.valid = false; }
+                  }
+                  if (f.negIsRegex && f.negText && f.negText.trim()) {
+                      try { p.negTester = new RegExp(f.negText, f.negCaseSens ? '' : 'i'); } catch(e) { p.valid = false; }
+                  }
+                  return p;
+              });
 
               const preparedTargetFilters = targetFilters.map(f => {
                   const p = { ...f, valid: true };
@@ -236,22 +237,51 @@ const workerCode = `
                   if (preparedSourceFilters.length > 0) {
                       const srcVal = String(item['en-US'] || '');
                       
-                      const checkFilter = (filter) => {
-                          if (filter.isRegex) {
-                              return filter.isValid && filter.tester.test(srcVal);
+                      const checkSourceGroup = (filter) => {
+                          if (!filter.valid) return false;
+                          
+                          const hasPos = filter.posText && filter.posText.trim() !== '';
+                          const hasNeg = filter.negText && filter.negText.trim() !== '';
+                          
+                          if (!hasPos && !hasNeg) return true;
+
+                          let foundPos = !hasPos;
+                          let foundNeg = false;
+                          
+                          const sPos = filter.posCaseSens ? filter.posText.trim() : filter.posText.trim().toLowerCase();
+                          const sNeg = filter.negCaseSens ? filter.negText.trim() : filter.negText.trim().toLowerCase();
+
+                          if (hasPos && !foundPos) {
+                              if (filter.posIsRegex) {
+                                  if (filter.posTester && filter.posTester.test(srcVal)) foundPos = true;
+                              } else {
+                                  const tVal = filter.posCaseSens ? srcVal : srcVal.toLowerCase();
+                                  if (filter.whole ? tVal === sPos : tVal.includes(sPos)) foundPos = true;
+                              }
                           }
-                          const fText = filter.caseSens ? filter.text.trim() : filter.text.trim().toLowerCase();
-                          const target = filter.caseSens ? srcVal : srcVal.toLowerCase();
-                          if (filter.whole) {
-                              return target === fText;
+
+                          if (hasNeg) {
+                              if (filter.negIsRegex) {
+                                  if (filter.negTester && filter.negTester.test(srcVal)) {
+                                      foundNeg = true;
+                                  }
+                              } else {
+                                  const tVal = filter.negCaseSens ? srcVal : srcVal.toLowerCase();
+                                  if (filter.whole ? tVal === sNeg : tVal.includes(sNeg)) {
+                                      foundNeg = true;
+                                  }
+                              }
                           }
-                          return target.includes(fText);
+
+                          if (foundNeg) return false;
+                          if (!foundPos) return false;
+                          return true;
                       };
 
                       if (sourceLogic === 'OR') {
-                          if (!preparedSourceFilters.some(checkFilter)) return false;
+                          if (!preparedSourceFilters.some(checkSourceGroup)) return false;
                       } else {
-                          if (!preparedSourceFilters.every(checkFilter)) return false;
+                          if (!preparedSourceFilters.every(checkSourceGroup)) return false;
                       }
                   }
 
@@ -383,7 +413,16 @@ const App: React.FC = () => {
   
   // Source Filter State
   const [sourceFilters, setSourceFilters] = useState<SourceFilterItem[]>([
-    { id: 'initial', text: '', whole: false, caseSens: false, isRegex: false }
+    { 
+      id: 'initial', 
+      posText: '', 
+      negText: '', 
+      whole: false, 
+      posCaseSens: false, 
+      posIsRegex: false, 
+      negCaseSens: false, 
+      negIsRegex: false 
+    }
   ]);
   const [sourceLogic, setSourceLogic] = useState<'AND' | 'OR'>('AND');
 
@@ -586,19 +625,32 @@ const App: React.FC = () => {
 
   // Source Filter Handlers
   const addSourceFilter = () => {
-    setSourceFilters(prev => [...prev, { id: Date.now().toString(), text: '', whole: false, caseSens: false, isRegex: false }]);
+    setSourceFilters(prev => [...prev, { 
+      id: Date.now().toString(), 
+      posText: '', negText: '', 
+      whole: false, 
+      posCaseSens: false, posIsRegex: false, 
+      negCaseSens: false, negIsRegex: false 
+    }]);
   };
 
   const removeSourceFilter = (id: string) => {
     if (sourceFilters.length > 1) {
       setSourceFilters(prev => prev.filter(item => item.id !== id));
     } else {
-        updateSourceFilter(id, 'text', '');
+        updateSourceFilter(id, 'posText', '');
+        updateSourceFilter(id, 'negText', '');
     }
   };
   
   const handleClearSourceFilters = () => {
-    setSourceFilters([{ id: Date.now().toString(), text: '', whole: false, caseSens: false, isRegex: false }]);
+    setSourceFilters([{ 
+      id: Date.now().toString(), 
+      posText: '', negText: '', 
+      whole: false, 
+      posCaseSens: false, posIsRegex: false, 
+      negCaseSens: false, negIsRegex: false 
+    }]);
     setSourceLogic('AND');
   };
 
@@ -824,7 +876,7 @@ const App: React.FC = () => {
                         <div className="flex justify-between items-center mb-2">
                             <div className="flex items-center gap-2">
                                 <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Source (en-US)</label>
-                                {(sourceFilters.length > 1 || sourceFilters[0].text) && (
+                                {(sourceFilters.length > 1 || sourceFilters[0].posText || sourceFilters[0].negText) && (
                                     <button onClick={handleClearSourceFilters} className="text-[10px] text-gray-500 hover:text-red-400 transition-colors">Clear</button>
                                 )}
                             </div>
@@ -846,38 +898,64 @@ const App: React.FC = () => {
 
                         <div className="space-y-4">
                           {sourceFilters.map((filter) => (
-                            <div key={filter.id} className="relative group animate-fadeIn">
-                                <div className="flex gap-2 items-center">
-                                     <input 
-                                        type="text" 
-                                        value={filter.text}
-                                        onChange={(e) => updateSourceFilter(filter.id, 'text', e.target.value)}
-                                        placeholder={filter.isRegex ? "Regex pattern..." : "Search text..."}
-                                        className={`flex-1 min-w-0 bg-gray-900 border rounded px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none ${filter.isRegex && !checkRegexValidity(filter.text) ? 'border-red-500 focus:border-red-500' : 'border-gray-700'}`}
-                                     />
-                                     {sourceFilters.length > 1 && (
-                                         <button onClick={() => removeSourceFilter(filter.id)} className="text-gray-500 hover:text-red-400 p-1 rounded hover:bg-gray-700/50 transition-colors" title="Remove condition">
+                            <div key={filter.id} className="relative group animate-fadeIn pb-4 border-b border-gray-700/30 last:border-0 last:pb-0">
+                                <div className="flex mb-2 gap-2">
+                                    <span className="inline-flex items-center justify-center px-3 bg-white text-gray-900 text-xs font-bold rounded min-w-[3.5rem] h-[34px]">Pos</span>
+                                    <div className="flex-1 min-w-0 relative">
+                                      <input 
+                                          type="text" 
+                                          value={filter.posText} 
+                                          onChange={(e)=>updateSourceFilter(filter.id, 'posText', e.target.value)} 
+                                          placeholder="Positive keyword..." 
+                                          className={`w-full bg-gray-900 border rounded px-3 py-2 text-sm focus:ring-1 focus:ring-cyan-500 outline-none ${filter.posIsRegex && !checkRegexValidity(filter.posText) ? 'border-red-500 focus:border-red-500' : 'border-gray-700'}`}
+                                      />
+                                      {sourceFilters.length > 1 && (
+                                         <button onClick={() => removeSourceFilter(filter.id)} className="absolute right-1 top-1.5 text-gray-500 hover:text-red-400 p-0.5 rounded hover:bg-gray-700/50 transition-colors" title="Remove condition">
                                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
                                               <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
                                             </svg>
                                          </button>
-                                     )}
+                                      )}
+                                    </div>
                                 </div>
-                                <div className="flex gap-4 mt-2">
-                                    <label className={`flex items-center text-xs text-gray-400 cursor-pointer select-none ${filter.isRegex ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                                        <input type="checkbox" checked={filter.whole} onChange={(e) => updateSourceFilter(filter.id, 'whole', e.target.checked)} disabled={filter.isRegex} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/>
-                                        Match whole
-                                    </label>
-                                    <label className="flex items-center text-xs text-gray-400 cursor-pointer select-none">
-                                        <input type="checkbox" checked={filter.caseSens} onChange={(e) => updateSourceFilter(filter.id, 'caseSens', e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/>
-                                        Match case
-                                    </label>
-                                    <label className="flex items-center text-xs text-yellow-400 cursor-pointer select-none">
-                                        <input type="checkbox" checked={filter.isRegex} onChange={(e) => updateSourceFilter(filter.id, 'isRegex', e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-yellow-500"/>
-                                        Regex
-                                    </label>
+
+                                <div className="flex gap-2">
+                                    <span className="inline-flex items-center justify-center px-3 bg-white text-gray-900 text-xs font-bold rounded min-w-[3.5rem] h-[34px]">Neg</span>
+                                    <input 
+                                        type="text" 
+                                        value={filter.negText} 
+                                        onChange={(e)=>updateSourceFilter(filter.id, 'negText', e.target.value)} 
+                                        placeholder="Negative keyword (Exclude)..." 
+                                        className={`flex-1 min-w-0 bg-gray-900 border rounded px-3 py-2 text-sm focus:ring-1 focus:ring-red-500 outline-none ${filter.negIsRegex && !checkRegexValidity(filter.negText) ? 'border-red-500 focus:border-red-500' : 'border-red-900/50'}`}
+                                    />
                                 </div>
-                            </div>
+                                
+                                <div className="grid grid-cols-2 gap-y-2 mt-3 pl-1">
+                                    <label className={`flex items-center text-xs text-gray-400 cursor-pointer ${filter.posIsRegex || filter.negIsRegex ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                                        <input type="checkbox" checked={filter.whole} onChange={(e)=>updateSourceFilter(filter.id, 'whole', e.target.checked)} disabled={filter.posIsRegex || filter.negIsRegex} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match whole
+                                    </label>
+                                    
+                                    {/* Positive Options */}
+                                    <div className="flex gap-3 col-span-1">
+                                        <label className="flex items-center text-xs text-gray-400 cursor-pointer">
+                                            <input type="checkbox" checked={filter.posCaseSens} onChange={(e)=>updateSourceFilter(filter.id, 'posCaseSens', e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-cyan-500"/> Match case (Pos)
+                                        </label>
+                                        <label className="flex items-center text-xs text-yellow-400 cursor-pointer">
+                                            <input type="checkbox" checked={filter.posIsRegex} onChange={(e)=>updateSourceFilter(filter.id, 'posIsRegex', e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-yellow-500"/> Regex (Pos)
+                                        </label>
+                                    </div>
+
+                                    {/* Negative Options */}
+                                    <div className="flex gap-3 col-span-2 mt-1">
+                                        <label className="flex items-center text-xs text-gray-400 cursor-pointer">
+                                            <input type="checkbox" checked={filter.negCaseSens} onChange={(e)=>updateSourceFilter(filter.id, 'negCaseSens', e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-red-500"/> Match case (Neg)
+                                        </label>
+                                        <label className="flex items-center text-xs text-yellow-400 cursor-pointer">
+                                            <input type="checkbox" checked={filter.negIsRegex} onChange={(e)=>updateSourceFilter(filter.id, 'negIsRegex', e.target.checked)} className="mr-1.5 h-3.5 w-3.5 accent-yellow-500"/> Regex (Neg)
+                                        </label>
+                                    </div>
+                                </div>
+                           </div>
                           ))}
                         </div>
                         
