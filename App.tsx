@@ -84,9 +84,16 @@ const workerCode = `
           primaryFilteredTranslations = allTranslations;
           finalFilteredTranslations = allTranslations;
           
-          detectedKeys = data.length > 0 
-            ? Object.keys(data[0]).filter(k => k !== 'key')
-            : [];
+          const uniqueKeys = new Set();
+          for (let i = 0; i < data.length; i++) {
+            const keys = Object.keys(data[i]);
+            for (let j = 0; j < keys.length; j++) {
+              if (keys[j] !== 'key') {
+                uniqueKeys.add(keys[j]);
+              }
+            }
+          }
+          detectedKeys = Array.from(uniqueKeys);
 
           self.postMessage({ 
             type: 'loaded', 
